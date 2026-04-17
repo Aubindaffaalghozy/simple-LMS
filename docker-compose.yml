@@ -1,0 +1,73 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # Django Application
+  app:
+    build: .
+    container_name: simple_lms
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgres://postgres:postgres@database:5432/lms_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=django-insecure-dev-key-change-in-production
+    volumes:
+      - .:/app
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - lms-network
+
+  # PostgreSQL Database
+  database:
+    image: postgres:15-alpine
+    container_name: lms_database
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: lms_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lms-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: lms_redis
+    volumes:
+      - redis_data:/data
+    networks:
+      - lms-network
+
+  # pgAdmin - Database Management UI
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: lms_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - database
+    networks:
+      - lms-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  lms-network:
+    driver: bridge
