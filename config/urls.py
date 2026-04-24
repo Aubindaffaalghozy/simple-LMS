@@ -8,6 +8,8 @@ from django.views.decorators.cache import cache_page
 from django.core.cache import cache
 import redis
 
+from api.views import api as api_router
+
 
 def health_check(request):
     """Health check endpoint to verify all services are running."""
@@ -75,4 +77,5 @@ urlpatterns = [
     path('health/', health_check, name='health'),
     path('cached/', cached_endpoint, name='cached'),
     path('admin/', admin.site.urls),
+    path('api/', api_router.urls),
 ]
