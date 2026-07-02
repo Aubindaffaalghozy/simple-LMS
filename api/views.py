@@ -19,6 +19,16 @@ from .schemas import (
     EnrollmentIn, EnrollmentOut, EnrollmentListOut, ProgressIn, ProgressOut, PaginatedEnrollmentsOut,
 )
 from .auth import create_tokens, verify_token, authenticate_user, get_user_from_token
+from .filters import CourseFilter
+from .cache_utils import (
+    get_cached_course_list,
+    set_cached_course_list,
+    get_cached_course_detail,
+    set_cached_course_detail,
+    invalidate_course_cache,
+)
+from .mongo_utils import MongoLogStore
+from .tasks import send_enrollment_email, generate_certificate, update_course_statistics
 from .rbac import is_instructor, is_admin, is_student, is_enrolled, is_course_owner
 
 
@@ -33,6 +43,8 @@ api = NinjaAPI(
 auth_router = Router()
 courses_router = Router()
 enrollments_router = Router()
+
+mongo_store = MongoLogStore()
 
 
 # ==================== Helper Functions ====================
@@ -151,10 +163,16 @@ def list_courses(
     min_price: Optional[int] = Query(None, ge=0, description="Minimum price"),
     max_price: Optional[int] = Query(None, ge=0, description="Maximum price"),
     is_published: Optional[bool] = Query(None, description="Filter by published status"),
+    filters: Optional[CourseFilter] = Query(None, description="Advanced course filters"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Items per page"),
 ):
     """List all courses with pagination and filters."""
+    cache_key = f"{search or ''}:{category_id or ''}:{min_price or ''}:{max_price or ''}:{is_published or ''}:page:{page}:size:{page_size}"
+    cached_payload = get_cached_course_list(cache_key)
+    if cached_payload is not None:
+        return cached_payload
+
     # Start with published courses only for public endpoint
     queryset = Course.objects.select_related('instructor', 'category').filter(is_published=True)
     
@@ -169,25 +187,34 @@ def list_courses(
         queryset = queryset.filter(price__lte=max_price)
     if is_published is not None:
         queryset = queryset.filter(is_published=is_published)
+    if filters:
+        queryset = filters.filter(queryset)
     
     # Get pagination
     page, page_size = get_pagination_params(page, page_size)
     items, total, total_pages = paginate_query(queryset, page, page_size)
     
-    return {
+    payload = {
         'items': list(items),
         'total': total,
         'page': page,
         'page_size': page_size,
         'total_pages': total_pages
     }
+    set_cached_course_list(cache_key, payload, timeout=300)
+    return payload
 
 
 @courses_router.get('/{id}', response=CourseDetailOut, tags=['Courses'])
 def get_course(request, id: int = Path(..., description="Course ID")):
     """Get course detail by ID."""
+    cached_course = get_cached_course_detail(id)
+    if cached_course is not None:
+        return cached_course
+
     try:
         course = Course.objects.select_related('instructor', 'category').get(pk=id)
+        set_cached_course_detail(id, course, timeout=300)
         return course
     except Course.DoesNotExist:
         raise HttpError(404, "Course not found")
@@ -225,6 +252,12 @@ def create_course(request, data: CourseIn):
         max_students=data.max_students,
         instructor=user
     )
+    mongo_store.append_activity({
+        'event': 'course_created',
+        'course_id': course.id,
+        'instructor_id': user.id,
+    })
+    update_course_statistics.delay()
     
     return 201, course
 
@@ -263,6 +296,7 @@ def update_course(request, id: int = Path(...), data: CourseIn = None):
         course.max_students = data.max_students
     
     course.save()
+    invalidate_course_cache(course.id)
     return course
 
 
@@ -286,6 +320,7 @@ def delete_course(request, id: int = Path(...)):
         raise HttpError(404, "Course not found")
     
     course.delete()
+    invalidate_course_cache()
     return 204, None
 
 
@@ -322,6 +357,13 @@ def enroll_course(request, data: EnrollmentIn):
         student=user,
         role='student'
     )
+    mongo_store.append_activity({
+        'event': 'enrollment_created',
+        'course_id': course.id,
+        'student_id': user.id,
+        'enrollment_id': enrollment.id,
+    })
+    send_enrollment_email.delay(enrollment.id)
     
     return 201, enrollment
 
@@ -421,6 +463,16 @@ def mark_lesson_complete(
         completed = enrollment.progress_records.filter(is_completed=True).count()
         enrollment.progress_percentage = int((completed / total_lessons) * 100)
         enrollment.save()
+
+    if progress.is_completed:
+        generate_certificate.delay(enrollment.id)
+
+    mongo_store.append_analytics({
+        'event': 'lesson_completed',
+        'course_id': enrollment.course.id,
+        'enrollment_id': enrollment.id,
+        'completion_percentage': progress.completion_percentage,
+    })
     
     return progress
 

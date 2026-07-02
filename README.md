@@ -22,6 +22,10 @@ Aplikasi Django berbasis web untuk Learning Management System dengan dukungan Po
 - ✅ Web Framework Django 4.2.0
 - ✅ PostgreSQL 15 Database dengan health check
 - ✅ Redis 7 untuk Caching & Session Management
+- ✅ MongoDB 7 untuk activity log dan analytics document storage
+- ✅ RabbitMQ + Celery untuk asynchronous task processing
+- ✅ Flower untuk monitoring Celery
+- ✅ Rate limiting sederhana 60 request/menit per IP
 - ✅ Django Admin Panel untuk management
 - ✅ pgAdmin untuk Database Management UI
 - ✅ Docker & Docker Compose untuk containerization
@@ -36,6 +40,10 @@ Aplikasi Django berbasis web untuk Learning Management System dengan dukungan Po
 | **Django** | 4.2.0 | Web Framework |
 | **PostgreSQL** | 15-alpine | Database |
 | **Redis** | 7-alpine | Cache & Session Store |
+| **MongoDB** | 7 | Document storage |
+| **RabbitMQ** | 3-management | Message broker |
+| **Celery** | Latest | Background task processing |
+| **Flower** | Latest | Celery monitoring |
 | **Python** | 3.11-slim | Runtime |
 | **Docker** | Latest | Container Platform |
 | **pgAdmin** | Latest | Database UI |
@@ -107,6 +115,8 @@ docker-compose exec -T app python manage.py shell -c "from django.contrib.auth i
 | **Django App** | http://localhost:8000 | 8000 |
 | **Admin Panel** | http://localhost:8000/admin | 8000 |
 | **pgAdmin** | http://localhost:5050 | 5050 |
+| **RabbitMQ UI** | http://localhost:15672 | 15672 |
+| **Flower** | http://localhost:5555 | 5555 |
 
 ---
 
@@ -162,6 +172,31 @@ docker-compose up -d --build
 ---
 
 ## 🌐 Services & Endpoints
+
+### Advanced API Features
+
+- Redis caching untuk daftar dan detail course.
+- Rate limiting sederhana dengan batas 60 request per menit per IP.
+- MongoDB helper untuk activity log dan analytics.
+- Celery tasks untuk email enrollment, certificate generation, update statistik course, dan export report.
+
+### Redis Commands
+```bash
+docker-compose exec redis redis-cli ping
+docker-compose exec redis redis-cli keys "simple_lms:*"
+```
+
+### Architecture Diagram
+```mermaid
+flowchart LR
+    Client --> Web[ Django API ]
+    Web --> DB[(PostgreSQL)]
+    Web --> Redis[(Redis)]
+    Web --> Mongo[(MongoDB)]
+    Web --> Rabbit[(RabbitMQ)]
+    Rabbit --> Worker[Celery Worker]
+    Worker --> Redis
+```
 
 ### Django Application
 

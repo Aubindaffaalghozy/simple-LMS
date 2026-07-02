@@ -2,29 +2,34 @@
 version: '3.8'
 
 services:
-  # Django Application
-  app:
+  web:
     build: .
     container_name: simple_lms
     ports:
       - "8000:8000"
     environment:
       - DEBUG=True
-      - DATABASE_URL=postgres://postgres:postgres@database:5432/lms_db
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/lms_db
       - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - MONGO_URI=mongodb://mongodb:27017/simple_lms
       - SECRET_KEY=django-insecure-dev-key-change-in-production
     volumes:
       - .:/app
     depends_on:
-      database:
+      db:
         condition: service_healthy
       redis:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      rabbitmq:
         condition: service_started
     networks:
       - lms-network
 
-  # PostgreSQL Database
-  database:
+  db:
     image: postgres:15-alpine
     container_name: lms_database
     environment:
@@ -41,7 +46,6 @@ services:
     networks:
       - lms-network
 
-  # Redis Cache
   redis:
     image: redis:7-alpine
     container_name: lms_redis
@@ -50,7 +54,67 @@ services:
     networks:
       - lms-network
 
-  # pgAdmin - Database Management UI
+  mongodb:
+    image: mongo:7
+    container_name: lms_mongodb
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - lms-network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: lms_rabbitmq
+    ports:
+      - "15672:15672"
+    networks:
+      - lms-network
+
+  celery-worker:
+    build: .
+    command: celery -A config worker -l info
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/lms_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - MONGO_URI=mongodb://mongodb:27017/simple_lms
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    networks:
+      - lms-network
+
+  celery-beat:
+    build: .
+    command: celery -A config beat -l info
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/lms_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - MONGO_URI=mongodb://mongodb:27017/simple_lms
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    networks:
+      - lms-network
+
+  flower:
+    build: .
+    command: celery -A config flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - rabbitmq
+    networks:
+      - lms-network
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: lms_pgadmin
@@ -60,13 +124,14 @@ services:
     ports:
       - "5050:80"
     depends_on:
-      - database
+      - db
     networks:
       - lms-network
 
 volumes:
   postgres_data:
   redis_data:
+  mongo_data:
 
 networks:
   lms-network:
