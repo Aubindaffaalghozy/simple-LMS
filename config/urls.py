@@ -9,9 +9,21 @@ from django.core.cache import cache
 import redis
 
 try:
-    from api.views import api as api_router
+    from django.apps import apps
+    apps.populate(settings.INSTALLED_APPS)
 except Exception:
+    pass
+
+try:
+    from api.views import api as api_router, dashboard_summary_view, analytics_dashboard_view
+except Exception as exc:
     api_router = None
+    dashboard_summary_view = None
+    analytics_dashboard_view = None
+    import logging
+    logging.getLogger(__name__).warning("API router import failed: %s", exc)
+
+from weather_api import get_weather
 
 
 def health_check(request):
@@ -70,17 +82,29 @@ def home(request):
         'endpoints': {
             'health': '/health/',
             'cached': '/cached/',
+            'weather': '/weather/?city=Jakarta',
             'admin': '/admin/',
         }
     }, json_dumps_params={'indent': 2})
+
+
+def weather_demo(request):
+    """Demo endpoint for Redis caching."""
+    city = request.GET.get('city', 'Jakarta')
+    return JsonResponse(get_weather(city), json_dumps_params={'indent': 2})
 
 
 urlpatterns = [
     path('', home, name='home'),
     path('health/', health_check, name='health'),
     path('cached/', cached_endpoint, name='cached'),
+    path('weather/', weather_demo, name='weather'),
+    path('dashboard/summary/', dashboard_summary_view, name='dashboard-summary') if dashboard_summary_view is not None else None,
+    path('dashboard/analytics/', analytics_dashboard_view, name='dashboard-analytics') if analytics_dashboard_view is not None else None,
     path('admin/', admin.site.urls),
 ]
+
+urlpatterns = [pattern for pattern in urlpatterns if pattern is not None]
 
 if api_router is not None:
     urlpatterns.append(path('api/', api_router.urls))

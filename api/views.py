@@ -5,6 +5,8 @@ Django Ninja API with JWT Authentication and RBAC
 from typing import List, Optional
 from django.contrib.auth.models import User
 from django.db.models import Q
+from django.http import JsonResponse
+from django.db import models
 from ninja import NinjaAPI, Router, Query, Path
 from ninja.errors import HttpError
 
@@ -63,6 +65,46 @@ def paginate_query(query, page: int, page_size: int):
     offset = (page - 1) * page_size
     items = query[offset:offset + page_size]
     return items, total, total_pages
+
+
+def dashboard_summary(request):
+    """Return key LMS metrics for the dashboard."""
+    total_courses = Course.objects.count()
+    published_courses = Course.objects.filter(is_published=True).count()
+    active_enrollments = Enrollment.objects.filter(is_active=True).count()
+    active_students = User.objects.filter(course_enrollments__is_active=True).distinct().count()
+    completed_lessons = Progress.objects.filter(is_completed=True).count()
+
+    return {
+        "total_courses": total_courses,
+        "published_courses": published_courses,
+        "active_enrollments": active_enrollments,
+        "active_students": active_students,
+        "completed_lessons": completed_lessons,
+    }
+
+
+def dashboard_summary_view(request):
+    """Expose the dashboard summary as a JSON endpoint."""
+    return JsonResponse(dashboard_summary(request), json_dumps_params={'indent': 2})
+
+
+def analytics_dashboard_view(request):
+    """Expose recent analytics and course activity for the admin dashboard."""
+    recent_activity = mongo_store.get_analytics_report()[-5:]
+    total_completed_lessons = Progress.objects.filter(is_completed=True).count()
+    average_completion = 0
+    if Enrollment.objects.exists():
+        average_completion = round(
+            Enrollment.objects.filter(progress_percentage__gt=0).aggregate(models.Avg('progress_percentage'))['progress_percentage__avg'] or 0,
+            2,
+        )
+
+    return JsonResponse({
+        "recent_activity": recent_activity,
+        "total_completed_lessons": total_completed_lessons,
+        "average_completion_percentage": average_completion,
+    }, json_dumps_params={'indent': 2})
 
 
 # ==================== Authentication Endpoints ====================
